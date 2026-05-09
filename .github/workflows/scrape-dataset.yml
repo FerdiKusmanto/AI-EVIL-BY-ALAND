@@ -1,0 +1,30 @@
+name: Scrape Dataset
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # tiap hari jam 02:00 UTC
+  workflow_dispatch:        # bisa dijalankan manual
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: pip install requests beautifulsoup4 wikipedia-api
+
+      - name: Run scraper
+        run: python aland-ai/training/scraper.py
+
+      - name: Commit dataset
+        run: |
+          git config user.name "aland-bot"
+          git config user.email "bot@aland-ai"
+          git add aland-ai/training/dataset.jsonl
+          git diff --cached --quiet || git commit -m "dataset: auto-scrape $(date +%Y-%m-%d)"
+          git push
