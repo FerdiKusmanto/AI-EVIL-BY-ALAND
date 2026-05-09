@@ -5,6 +5,9 @@ on:
     - cron: '0 3 * * 0'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   train:
     runs-on: ubuntu-latest
@@ -16,9 +19,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install deps
-        run: |
-          pip install transformers peft datasets accelerate torch --index-url https://download.pytorch.org/whl/cpu
-          pip install huggingface_hub
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu && pip install transformers peft datasets accelerate huggingface_hub
 
       - name: Download dataset
         run: |
@@ -26,12 +27,12 @@ jobs:
             https://github.com/FerdiKusmanto/AI-EVIL-BY-ALAND/releases/download/dataset-latest/dataset.jsonl.gz
           gunzip aland-ai/training/dataset.jsonl.gz
 
-      - name: Fine-tune (CPU, model kecil)
+      - name: Train model
         run: python aland-ai/training/train_cloud.py
 
       - name: Upload model ke release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload model-latest /tmp/aland-id-latest.gguf --clobber || \
+          gh release upload model-latest /tmp/aland-id-latest.gguf --clobber 2>/dev/null || \
           gh release create model-latest /tmp/aland-id-latest.gguf --title "Model Latest" --notes "Auto-trained"
