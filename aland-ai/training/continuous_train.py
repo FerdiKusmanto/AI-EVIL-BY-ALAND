@@ -1,0 +1,146 @@
+"""
+continuous_train.py — Scrape + train terus-menerus, upload model tiap 5 menit
+"""
+import json, random, re, time, pickle, subprocess, os
+from pathlib import Path
+from collections import defaultdict
+from math import log
+
+import requests
+import wikipediaapi
+
+DATASET   = Path("aland-ai/training/dataset.jsonl")
+MODEL_OUT = Path("/tmp/aland-id-latest.gguf")
+INTERVAL  = 300   # simpan & upload tiap 5 menit
+
+WIKI = wikipediaapi.Wikipedia(language="id", user_agent="aland-ai/1.0")
+
+TOPICS = [
+    "Kecerdasan buatan","Machine learning","Python (bahasa pemrograman)",
+    "Jaringan saraf tiruan","Pemrosesan bahasa alami","Komputer","Internet",
+    "Indonesia","Sejarah Indonesia","Pancasila","Bahasa Indonesia",
+    "Matematika","Fisika","Kimia","Biologi","Geografi","Ekonomi",
+    "Kesehatan","Olahraga","Musik","Seni","Sastra","Memasak",
+    "Pertanian","Lingkungan hidup","Energi terbarukan","Pendidikan","Psikologi",
+    "Algoritma","Struktur data","Sistem operasi","Linux","Basis data",
+]
+
+def normalize(t): return re.sub(r'\s+', ' ', t.lower().strip())
+def tokenize(t):  return re.findall(r'\w+', normalize(t))
+
+def scrape_topic(title: str) -> list:
+    page = WIKI.page(title)
+    if not page.exists(): return []
+    pairs = []
+    summary = page.summary[:500].strip()
+    if len(summary) > 50:
+        for q in [f"Apa itu {title}?", f"Jelaskan {title}", f"Ceritakan tentang {title}"]:
+            pairs.append((q, summary))
+    for s in page.sections:
+        text = s.text.strip()
+        if 80 <= len(text) <= 600:
+            pairs.append((f"Apa itu {s.title} dalam {title}?", text[:500]))
+    return pairs
+
+def build_model(pairs: list) -> dict:
+    N = max(len(pairs), 1)
+    df = defaultdict(int)
+    for q, _ in pairs:
+        for w in set(tokenize(q)): df[w] += 1
+    idf = {w: log(N / (c + 1)) for w, c in df.items()}
+    vectors = []
+    for q, a in pairs:
+        tf = defaultdict(int)
+        for w in tokenize(q): tf[w] += 1
+        vectors.append(({w: tf[w] * idf.get(w, 0) for w in tf}, a))
+    return {"pairs": pairs, "vectors": vectors, "idf": idf}
+
+def upload_model():
+    subprocess.run(
+        ["gh", "release", "upload", "model-latest", str(MODEL_OUT), "--clobber"],
+        capture_output=True
+    )
+    print(f"  ✅ Model diupload ({MODEL_OUT.stat().st_size//(1024*1024)}MB)")
+
+def upload_dataset():
+    gz = Path(str(DATASET) + ".gz")
+    subprocess.run(["gzip", "-kf", str(DATASET)], capture_output=True)
+    subprocess.run(
+        ["gh", "release", "upload", "dataset-latest", str(gz), "--clobber"],
+        capture_output=True
+    )
+    print(f"  ✅ Dataset diupload")
+
+def main():
+    # Load dataset awal
+    pairs = []
+    existing_q = set()
+    if DATASET.exists():
+        with open(DATASET, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    obj = json.loads(line)
+                    msgs = obj.get("messages", [])
+                    if len(msgs) >= 2:
+                        q, a = msgs[0]["content"].strip(), msgs[1]["content"].strip()
+                        if q and a:
+                            pairs.append((q, a))
+                            existing_q.add(q.lower())
+                except: pass
+    print(f"Dataset awal: {len(pairs)} pairs")
+
+    last_save = time.time()
+    topics = TOPICS.copy()
+    random.shuffle(topics)
+    topic_idx = 0
+    new_count = 0
+
+    while True:
+        # Scrape 1 topik
+        topic = topics[topic_idx % len(topics)]
+        topic_idx += 1
+        if topic_idx % len(topics) == 0:
+            random.shuffle(topics)
+
+        print(f"Scraping: {topic}")
+        try:
+            new_pairs = scrape_topic(topic)
+            added = 0
+            for q, a in new_pairs:
+                if q.lower() not in existing_q:
+                    pairs.append((q, a))
+                    existing_q.add(q.lower())
+                    added += 1
+            new_count += added
+            print(f"  +{added} pairs (total: {len(pairs)})")
+        except Exception as e:
+            print(f"  Error: {e}")
+
+        time.sleep(1)
+
+        # Tiap 5 menit: build model + upload
+        if time.time() - last_save >= INTERVAL:
+            print(f"\n⏱ 5 menit — build & upload model...")
+
+            # Simpan dataset
+            with open(DATASET, "w", encoding="utf-8") as f:
+                for q, a in pairs:
+                    f.write(json.dumps({"messages": [
+                        {"role": "user", "content": q},
+                        {"role": "assistant", "content": a}
+                    ]}, ensure_ascii=False) + "\n")
+
+            # Build model
+            model = build_model(pairs)
+            with open(MODEL_OUT, "wb") as f:
+                pickle.dump(model, f)
+
+            upload_model()
+            upload_dataset()
+
+            last_save = time.time()
+            new_count = 0
+            print()
+
+if __name__ == "__main__":
+    main()

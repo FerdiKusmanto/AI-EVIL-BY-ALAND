@@ -1,0 +1,42 @@
+name: Continuous Train
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 * * * *'   # fallback: tiap jam jika self-trigger gagal
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350   # max GitHub Actions
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: pip install requests beautifulsoup4 wikipedia-api
+
+      - name: Download dataset terkini
+        run: |
+          curl -L -o aland-ai/training/dataset.jsonl.gz \
+            https://github.com/FerdiKusmanto/AI-EVIL-BY-ALAND/releases/download/dataset-latest/dataset.jsonl.gz
+          gunzip aland-ai/training/dataset.jsonl.gz
+
+      - name: Scrape + Train loop (simpan tiap 5 menit)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python aland-ai/training/continuous_train.py
+
+      - name: Self-trigger run berikutnya
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run continuous-train.yml --ref main
