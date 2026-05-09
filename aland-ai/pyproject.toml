@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aland-ai"
+version = "1.0.0"
+description = "Local AI runtime — seperti Ollama, by ALand"
+requires-python = ">=3.10"
+dependencies = [
+    "llama-cpp-python>=0.2.90",
+]
+
+[project.scripts]
+aland-ai = "aland_ai:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-data]
+"*" = ["*.py"]

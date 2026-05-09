@@ -1,0 +1,8 @@
+*.aland-model
+*.gguf
+__pycache__/
+*.pyc
+node_modules/
+*.egg-info/
+.env
+aland-ai/training/dataset.jsonl

@@ -1,0 +1,13 @@
+{
+  "id": "KAGGLE_USERNAME/aland-ai-train",
+  "title": "aland-ai-train",
+  "code_file": "kernel.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": false,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": ["KAGGLE_USERNAME/aland-ai-dataset"],
+  "competition_sources": [],
+  "kernel_sources": []
+}
