@@ -1,0 +1,35 @@
+name: Scrape Dataset
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: pip install requests beautifulsoup4 wikipedia-api
+
+      - name: Download dataset terkini
+        run: |
+          curl -L -o aland-ai/training/dataset.jsonl.gz \
+            https://github.com/FerdiKusmanto/AI-EVIL-BY-ALAND/releases/download/dataset-latest/dataset.jsonl.gz
+          gunzip aland-ai/training/dataset.jsonl.gz
+
+      - name: Run scraper
+        run: python aland-ai/training/scraper.py
+
+      - name: Upload dataset ke release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gzip -f aland-ai/training/dataset.jsonl
+          gh release upload dataset-latest aland-ai/training/dataset.jsonl.gz --clobber
