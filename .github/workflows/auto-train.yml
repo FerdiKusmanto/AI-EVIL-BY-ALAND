@@ -1,0 +1,60 @@
+name: Auto Train Weekly
+
+on:
+  schedule:
+    - cron: '0 3 * * 0'   # tiap Minggu jam 03:00 UTC
+  workflow_dispatch:
+
+jobs:
+  trigger-kaggle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kaggle
+        run: pip install kaggle -q
+
+      - name: Push kernel & run
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+        run: |
+          mkdir -p ~/.kaggle
+          echo '{"username":"'"$KAGGLE_USERNAME"'","key":"'"$KAGGLE_KEY"'"}' > ~/.kaggle/kaggle.json
+          chmod 600 ~/.kaggle/kaggle.json
+
+          # Upload dataset terbaru ke Kaggle
+          cd aland-ai/training
+          kaggle datasets version -p . -m "auto-update $(date +%Y-%m-%d)" || \
+          kaggle datasets create -p . --dir-mode zip
+
+          # Trigger notebook
+          kaggle kernels push -p ../../kaggle_kernel/
+
+      - name: Wait & download model
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+        run: |
+          mkdir -p ~/.kaggle
+          echo '{"username":"'"$KAGGLE_USERNAME"'","key":"'"$KAGGLE_KEY"'"}' > ~/.kaggle/kaggle.json
+          chmod 600 ~/.kaggle/kaggle.json
+
+          # Tunggu kernel selesai (max 3 jam)
+          for i in $(seq 1 36); do
+            sleep 300
+            STATUS=$(kaggle kernels status $KAGGLE_USERNAME/aland-ai-train | grep -oP '(?<=status )\w+')
+            echo "Status: $STATUS"
+            if [ "$STATUS" = "complete" ]; then break; fi
+            if [ "$STATUS" = "error" ]; then echo "Kernel error!"; exit 1; fi
+          done
+
+          # Download output GGUF
+          kaggle kernels output $KAGGLE_USERNAME/aland-ai-train -p /tmp/model-out/
+
+      - name: Upload model ke release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: model-latest
+          files: /tmp/model-out/*.gguf
+          token: ${{ secrets.GITHUB_TOKEN }}
