@@ -16,13 +16,56 @@ INTERVAL  = 300   # simpan & upload tiap 5 menit
 WIKI = wikipediaapi.Wikipedia(language="id", user_agent="aland-ai/1.0")
 
 TOPICS = [
+    # Teknologi & Komputer
     "Kecerdasan buatan","Machine learning","Python (bahasa pemrograman)",
     "Jaringan saraf tiruan","Pemrosesan bahasa alami","Komputer","Internet",
-    "Indonesia","Sejarah Indonesia","Pancasila","Bahasa Indonesia",
-    "Matematika","Fisika","Kimia","Biologi","Geografi","Ekonomi",
-    "Kesehatan","Olahraga","Musik","Seni","Sastra","Memasak",
-    "Pertanian","Lingkungan hidup","Energi terbarukan","Pendidikan","Psikologi",
     "Algoritma","Struktur data","Sistem operasi","Linux","Basis data",
+    "Jaringan komputer","Keamanan siber","Pemrograman","JavaScript","Java",
+    "C++","Kriptografi","Cloud computing","Blockchain","Internet of Things",
+    "Robotika","Augmented reality","Virtual reality","Komputasi kuantum",
+    "Pengembangan web","Aplikasi mobile","DevOps","Git","Docker",
+    # Sains
+    "Matematika","Fisika","Kimia","Biologi","Geografi","Astronomi",
+    "Fisika kuantum","Relativitas","Termodinamika","Elektromagnetisme",
+    "Genetika","Evolusi","Ekologi","Anatomi","Fisiologi","Mikrobiologi",
+    "Kimia organik","Kimia anorganik","Fisika nuklir","Kosmologi",
+    "Geologi","Meteorologi","Oseanografi","Paleontologi","Botani","Zoologi",
+    # Indonesia & Sosial
+    "Indonesia","Sejarah Indonesia","Pancasila","Bahasa Indonesia",
+    "Suku bangsa di Indonesia","Budaya Indonesia","Pariwisata Indonesia",
+    "Ekonomi Indonesia","Politik Indonesia","Hukum Indonesia",
+    "Pendidikan di Indonesia","Kesehatan di Indonesia","Agama di Indonesia",
+    "Pulau Jawa","Pulau Sumatera","Pulau Kalimantan","Pulau Sulawesi",
+    "Bali","Jakarta","Surabaya","Bandung","Medan","Makassar",
+    # Ilmu Sosial
+    "Ekonomi","Sosiologi","Psikologi","Antropologi","Filsafat","Sejarah",
+    "Geografi sosial","Ilmu politik","Hukum","Pendidikan","Komunikasi",
+    "Manajemen","Akuntansi","Pemasaran","Kewirausahaan","Bisnis",
+    # Kesehatan & Kedokteran
+    "Kesehatan","Nutrisi","Olahraga","Kedokteran","Farmasi","Keperawatan",
+    "Penyakit jantung","Diabetes","Kanker","Hipertensi","Obesitas",
+    "Kesehatan mental","Psikiatri","Neurologi","Kardiologi","Onkologi",
+    "Imunologi","Virologi","Epidemiologi","Gizi","Vitamin",
+    # Seni & Budaya
+    "Musik","Seni","Sastra","Film","Fotografi","Arsitektur","Desain",
+    "Tari","Teater","Lukisan","Patung","Sastra Indonesia","Puisi",
+    "Novel","Cerpen","Komik","Animasi","Sinematografi",
+    # Alam & Lingkungan
+    "Lingkungan hidup","Perubahan iklim","Energi terbarukan","Pertanian",
+    "Kehutanan","Perikanan","Peternakan","Konservasi","Biodiversitas",
+    "Pemanasan global","Polusi","Daur ulang","Energi surya","Angin",
+    # Kehidupan Sehari-hari
+    "Memasak","Kuliner Indonesia","Resep masakan","Olahraga","Yoga",
+    "Meditasi","Perjalanan","Transportasi","Otomotif","Mode","Kecantikan",
+    "Pernikahan","Parenting","Keuangan pribadi","Investasi","Properti",
+    # Sejarah Dunia
+    "Perang Dunia II","Perang Dunia I","Revolusi Perancis","Revolusi Industri",
+    "Kekaisaran Romawi","Mesir kuno","Yunani kuno","Dinasti Ming",
+    "Kolonialisme","Perang Dingin","PBB","NATO","Uni Eropa",
+    # Tokoh
+    "Soekarno","Mohammad Hatta","Ki Hajar Dewantara","R.A. Kartini",
+    "Albert Einstein","Isaac Newton","Charles Darwin","Marie Curie",
+    "Leonardo da Vinci","Aristoteles","Plato","Socrates",
 ]
 
 def normalize(t): return re.sub(r'\s+', ' ', t.lower().strip())
@@ -32,14 +75,38 @@ def scrape_topic(title: str) -> list:
     page = WIKI.page(title)
     if not page.exists(): return []
     pairs = []
-    summary = page.summary[:500].strip()
+    summary = page.summary[:800].strip()
     if len(summary) > 50:
-        for q in [f"Apa itu {title}?", f"Jelaskan {title}", f"Ceritakan tentang {title}"]:
+        for q in [
+            f"Apa itu {title}?",
+            f"Jelaskan tentang {title}",
+            f"Ceritakan tentang {title}",
+            f"Apa yang dimaksud dengan {title}?",
+            f"Berikan penjelasan singkat tentang {title}",
+            f"Tolong jelaskan {title}",
+            f"Apa pengertian {title}?",
+        ]:
             pairs.append((q, summary))
+
     for s in page.sections:
         text = s.text.strip()
-        if 80 <= len(text) <= 600:
-            pairs.append((f"Apa itu {s.title} dalam {title}?", text[:500]))
+        if len(text) < 80: continue
+        chunks = [text[i:i+600] for i in range(0, min(len(text), 2400), 600)]
+        for i, chunk in enumerate(chunks):
+            if len(chunk) < 80: continue
+            pairs.append((f"Jelaskan {s.title} dalam konteks {title}", chunk))
+            pairs.append((f"Apa itu {s.title}?", chunk))
+            if i == 0:
+                pairs.append((f"Bagaimana {s.title} berkaitan dengan {title}?", chunk))
+
+    # Ambil linked pages (topik terkait)
+    for link_title in list(page.links.keys())[:10]:
+        linked = WIKI.page(link_title)
+        if not linked.exists(): continue
+        s2 = linked.summary[:400].strip()
+        if len(s2) > 80:
+            pairs.append((f"Apa hubungan {link_title} dengan {title}?", s2))
+
     return pairs
 
 def build_model(pairs: list) -> dict:
