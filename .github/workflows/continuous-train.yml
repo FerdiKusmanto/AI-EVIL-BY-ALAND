@@ -3,7 +3,11 @@ name: Continuous Train
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 * * * *'   # fallback: tiap jam jika self-trigger gagal
+    - cron: '0 * * * *'
+
+concurrency:
+  group: continuous-train
+  cancel-in-progress: false   # jangan cancel — biarkan selesai dulu
 
 permissions:
   contents: write
@@ -23,6 +27,17 @@ jobs:
 
       - name: Install deps
         run: pip install requests beautifulsoup4 wikipedia-api
+
+      - name: Cancel run lama jika ada
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Ambil semua run in_progress selain run ini sendiri
+          CURRENT_RUN=${{ github.run_id }}
+          gh run list --repo ${{ github.repository }} --status in_progress --json databaseId \
+            --jq ".[] | select(.databaseId != $CURRENT_RUN) | .databaseId" \
+            | xargs -I{} gh run cancel {} --repo ${{ github.repository }} 2>/dev/null || true
+          echo "Cleanup selesai"
 
       - name: Download dataset terkini
         run: |
