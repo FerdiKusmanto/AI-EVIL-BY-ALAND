@@ -26,9 +26,13 @@ jobs:
 
       - name: Download dataset terkini
         run: |
-          curl -L -o aland-ai/training/dataset.jsonl.gz \
-            https://github.com/FerdiKusmanto/AI-EVIL-BY-ALAND/releases/download/dataset-latest/dataset.jsonl.gz
-          gunzip aland-ai/training/dataset.jsonl.gz
+          # Download dari release, fallback ke dataset kosong jika gagal
+          curl -L --retry 3 --retry-delay 5 -f \
+            -o aland-ai/training/dataset.jsonl.gz \
+            https://github.com/FerdiKusmanto/AI-EVIL-BY-ALAND/releases/download/dataset-latest/dataset.jsonl.gz \
+            && gunzip -f aland-ai/training/dataset.jsonl.gz \
+            && echo "Dataset downloaded: $(wc -l < aland-ai/training/dataset.jsonl) lines" \
+            || echo "Download gagal, mulai dari dataset kosong"
 
       - name: Scrape + Train loop (simpan tiap 5 menit)
         env:

@@ -201,7 +201,8 @@ def main():
                             pairs.append((q, a))
                             existing_q.add(q.lower())
                 except: pass
-    print(f"Dataset awal: {len(pairs)} pairs ({sum(len(q)+len(a) for q,a in pairs)//1024}KB)")
+    size_mb = sum(len(q)+len(a) for q,a in pairs) / 1024 / 1024
+    print(f"Dataset awal: {len(pairs)} pairs (~{size_mb:.0f}MB)")
 
     # Fetch HuggingFace Wikipedia ID — 50000 artikel (target dataset 300MB)
     print("Fetching HuggingFace Wikipedia ID dataset (target 300MB)...")
