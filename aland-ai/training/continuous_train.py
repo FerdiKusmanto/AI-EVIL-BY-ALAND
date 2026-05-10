@@ -1,173 +1,146 @@
 """
-continuous_train.py — Multi-source scraping: Wikipedia + DuckDuckGo + dataset publik
-Target: +5-7MB per menit
+continuous_train.py — Infinite scraping, model naik tiap 1 menit, no duplicates
 """
-import json, random, re, time, pickle, subprocess, os, gzip, io
+import json, random, re, time, pickle, subprocess, os, gzip
 from pathlib import Path
 from collections import defaultdict
 from math import log
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import quote_plus
-
-import requests
-import wikipediaapi
+from urllib.parse import quote_plus, quote
+import urllib.request
 
 DATASET   = Path("aland-ai/training/dataset.jsonl")
 MODEL_OUT = Path("/tmp/aland-id-latest.gguf")
-INTERVAL  = 60    # upload tiap 1 menit
-WORKERS   = 20    # parallel threads
+UPLOAD_INTERVAL = 60   # upload tiap 1 menit
 
-WIKI = wikipediaapi.Wikipedia(language="id", user_agent="aland-ai/1.0")
-WIKI_EN = wikipediaapi.Wikipedia(language="en", user_agent="aland-ai/1.0")
-SESSION = requests.Session()
-SESSION.headers.update({"User-Agent": "Mozilla/5.0 (compatible; aland-ai/1.0)"})
-
-# ── Sumber dataset publik (download langsung, sudah jadi) ────────────────────
-PUBLIC_DATASETS = [
-    # Wikipedia dumps (ringkasan semua artikel)
-    "https://dumps.wikimedia.org/idwiki/latest/idwiki-latest-abstract.xml.gz",
-    # IndoNLI, IndoQA, dll via HuggingFace datasets API
-    "https://datasets-server.huggingface.co/rows?dataset=wikimedia%2Fwikipedia&config=20231101.id&split=train&offset=0&length=100",
-    "https://datasets-server.huggingface.co/rows?dataset=wikimedia%2Fwikipedia&config=20231101.id&split=train&offset=100&length=100",
-    "https://datasets-server.huggingface.co/rows?dataset=wikimedia%2Fwikipedia&config=20231101.id&split=train&offset=200&length=100",
-    "https://datasets-server.huggingface.co/rows?dataset=wikimedia%2Fwikipedia&config=20231101.id&split=train&offset=300&length=100",
-    "https://datasets-server.huggingface.co/rows?dataset=wikimedia%2Fwikipedia&config=20231101.id&split=train&offset=400&length=100",
+# ── Infinite topic generator ─────────────────────────────────────────────────
+SEED_TOPICS = [
+    "teknologi","sains","sejarah","budaya","kesehatan","pendidikan","ekonomi",
+    "politik","hukum","agama","filsafat","matematika","fisika","kimia","biologi",
+    "geografi","astronomi","komputer","internet","musik","seni","sastra","film",
+    "olahraga","kuliner","pertanian","lingkungan","transportasi","arsitektur",
+    "psikologi","sosiologi","antropologi","arkeologi","linguistik","kedokteran",
+    "farmasi","nutrisi","ekologi","geologi","meteorologi","oseanografi",
+    "Indonesia","Jawa","Sumatera","Kalimantan","Sulawesi","Bali","Papua",
+    "Jakarta","Surabaya","Bandung","Medan","Makassar","Yogyakarta","Semarang",
+    "Islam","Kristen","Hindu","Buddha","Konghucu",
+    "Soekarno","Hatta","Kartini","Einstein","Newton","Darwin","Curie",
+    "Majapahit","Sriwijaya","Mataram","Demak","Aceh","Ternate",
+    "sepak bola","bulu tangkis","basket","renang","atletik","tinju","pencak silat",
+    "nasi goreng","rendang","soto","gado-gado","sate","bakso","tempe","tahu",
+    "roti","kopi","teh","coklat","gula","garam","minyak","beras",
+    "mobil","motor","pesawat","kapal","kereta","sepeda","bus","truk",
+    "rumah","gedung","jembatan","jalan","bendungan","pelabuhan","bandara",
+    "pohon","bunga","hewan","ikan","burung","serangga","mamalia","reptil",
+    "air","udara","tanah","api","listrik","magnet","cahaya","suara","panas",
+    "demokrasi","republik","monarki","komunisme","kapitalisme","sosialisme",
+    "perang","damai","diplomasi","perjanjian","konstitusi","undang-undang",
+    "bank","saham","obligasi","inflasi","resesi","ekspor","impor","pajak",
+    "sekolah","universitas","kurikulum","guru","siswa","ujian","beasiswa",
+    "rumah sakit","dokter","perawat","obat","vaksin","virus","bakteri",
+    "planet","bintang","galaksi","lubang hitam","meteor","komet","satelit",
+    "atom","molekul","elektron","proton","neutron","ion","isotop","reaksi kimia",
+    "evolusi","genetika","DNA","sel","jaringan","organ","sistem tubuh",
+    "iklim","cuaca","hujan","angin","gempa","gunung berapi","tsunami","banjir",
+    "energi surya","angin","air","nuklir","batu bara","minyak bumi","gas alam",
 ]
 
-TOPICS_ID = [
-    "Kecerdasan buatan","Machine learning","Python","Jaringan saraf tiruan",
-    "Pemrosesan bahasa alami","Komputer","Internet","Algoritma","Struktur data",
-    "Sistem operasi","Linux","Basis data","Jaringan komputer","Keamanan siber",
-    "Pemrograman","JavaScript","Java","C++","Kriptografi","Cloud computing",
-    "Blockchain","Internet of Things","Robotika","Komputasi kuantum","Docker",
-    "Matematika","Fisika","Kimia","Biologi","Geografi","Astronomi",
-    "Fisika kuantum","Relativitas","Termodinamika","Elektromagnetisme",
-    "Genetika","Evolusi","Ekologi","Anatomi","Fisiologi","Mikrobiologi",
-    "Indonesia","Sejarah Indonesia","Pancasila","Bahasa Indonesia",
-    "Budaya Indonesia","Ekonomi Indonesia","Politik Indonesia",
-    "Pulau Jawa","Pulau Sumatera","Bali","Jakarta","Surabaya","Bandung",
-    "Proklamasi kemerdekaan Indonesia","Kerajaan Majapahit","Sriwijaya",
-    "Ekonomi","Sosiologi","Psikologi","Antropologi","Filsafat","Sejarah",
-    "Ilmu politik","Hukum","Pendidikan","Komunikasi","Manajemen","Bisnis",
-    "Kesehatan","Nutrisi","Olahraga","Kedokteran","Farmasi","Kanker",
-    "Kesehatan mental","Neurologi","Imunologi","Virologi","Epidemiologi",
-    "Musik","Seni","Sastra","Film","Fotografi","Arsitektur","Batik","Wayang",
-    "Lingkungan hidup","Perubahan iklim","Energi terbarukan","Pertanian",
-    "Perang Dunia II","Perang Dunia I","Revolusi Perancis","Revolusi Industri",
-    "Kekaisaran Romawi","Mesir kuno","Yunani kuno","Perang Dingin",
-    "Soekarno","Mohammad Hatta","Albert Einstein","Isaac Newton","Marie Curie",
-    "Islam","Kristen","Hindu","Buddha","Filsafat Barat","Etika","Logika",
-    "Sepak bola","Bulu tangkis","Basket","Olimpiade","Piala Dunia FIFA",
-    "Kuliner Indonesia","Nasi goreng","Rendang","Soto","Batik","Gamelan",
-    "Statistika","Kalkulus","Aljabar","Geometri","Biokimia","Astrofisika",
-    "COVID-19","Vaksin","Diabetes","Hipertensi","Gizi","Vitamin",
-    "Memasak","Pariwisata","Transportasi","Otomotif","Investasi","Properti",
-]
-
-TOPICS_EN = [
-    "Artificial intelligence","Machine learning","Deep learning","Neural network",
-    "Natural language processing","Computer science","Algorithm","Data structure",
-    "Operating system","Database","Cryptography","Cloud computing","Blockchain",
-    "Mathematics","Physics","Chemistry","Biology","Astronomy","Quantum physics",
-    "Genetics","Evolution","Ecology","Anatomy","Microbiology","Biochemistry",
-    "History","World War II","World War I","Cold War","Renaissance",
-    "Economics","Psychology","Sociology","Philosophy","Ethics","Logic",
-    "Health","Medicine","Nutrition","Cancer","Immunology","Virology",
-    "Music","Art","Literature","Film","Architecture","Photography",
-    "Climate change","Renewable energy","Agriculture","Conservation",
-    "Football","Basketball","Olympics","Tennis","Swimming",
-]
-
-def normalize(t): return re.sub(r'\s+', ' ', t.lower().strip())
-def tokenize(t):  return re.findall(r'\w+', normalize(t))
-
-def scrape_wiki_id(title: str) -> list:
+def get_wiki_categories(lang="id") -> list:
+    """Ambil daftar kategori Wikipedia untuk topik baru."""
+    url = f"https://{lang}.wikipedia.org/w/api.php?action=query&list=allcategories&aclimit=500&format=json"
     try:
-        page = WIKI.page(title)
-        if not page.exists(): return []
-        pairs = []
-        summary = page.summary[:800].strip()
-        if len(summary) > 50:
-            for q in [f"Apa itu {title}?", f"Jelaskan {title}",
-                      f"Apa pengertian {title}?", f"Ceritakan tentang {title}",
-                      f"Apa yang dimaksud {title}?", f"Tolong jelaskan {title}"]:
-                pairs.append((q, summary))
-        for s in page.sections:
-            text = s.text.strip()
-            if len(text) < 80: continue
-            for chunk in [text[i:i+600] for i in range(0, min(len(text),3000), 600)]:
-                if len(chunk) < 80: continue
-                pairs.append((f"Jelaskan {s.title} dalam {title}", chunk))
-                pairs.append((f"Apa itu {s.title}?", chunk))
-        for link in list(page.links.keys())[:20]:
-            try:
-                lp = WIKI.page(link)
-                if lp.exists() and len(lp.summary) > 80:
-                    pairs.append((f"Apa itu {link}?", lp.summary[:500]))
-            except: pass
-        return pairs
+        req = urllib.request.Request(url, headers={"User-Agent": "aland-ai/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+        return [c["*"] for c in data.get("query", {}).get("allcategories", [])]
     except: return []
 
-def scrape_wiki_en(title: str) -> list:
-    """Scrape Wikipedia English → terjemahkan pertanyaan ke Indonesia."""
+def get_wiki_random(lang="id", count=20) -> list:
+    """Ambil judul artikel Wikipedia secara random."""
+    url = f"https://{lang}.wikipedia.org/w/api.php?action=query&list=random&rnnamespace=0&rnlimit={count}&format=json"
     try:
-        page = WIKI_EN.page(title)
-        if not page.exists(): return []
-        pairs = []
-        summary = page.summary[:800].strip()
-        if len(summary) > 50:
-            for q in [f"What is {title}?", f"Explain {title}",
-                      f"Tell me about {title}", f"Define {title}"]:
-                pairs.append((q, summary))
-            # Versi Indonesia
-            for q in [f"Apa itu {title}?", f"Jelaskan {title}"]:
-                pairs.append((q, summary))
-        for s in page.sections:
-            text = s.text.strip()
-            if 80 <= len(text) <= 800:
-                pairs.append((f"What is {s.title} in {title}?", text[:600]))
-        return pairs
+        req = urllib.request.Request(url, headers={"User-Agent": "aland-ai/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+        return [p["title"] for p in data.get("query", {}).get("random", [])]
     except: return []
 
-def scrape_duckduckgo(query: str) -> list:
-    """DuckDuckGo Instant Answer API — gratis, no key."""
+def get_wiki_links(title: str, lang="id") -> list:
+    """Ambil semua link dari artikel Wikipedia."""
+    url = f"https://{lang}.wikipedia.org/w/api.php?action=query&titles={quote(title)}&prop=links&pllimit=50&format=json"
     try:
-        url = f"https://api.duckduckgo.com/?q={quote_plus(query)}&format=json&no_html=1&skip_disambig=1"
-        r = SESSION.get(url, timeout=5)
-        d = r.json()
-        pairs = []
-        abstract = d.get("AbstractText", "").strip()
-        if len(abstract) > 80:
-            pairs.append((f"Apa itu {query}?", abstract))
-            pairs.append((f"Jelaskan {query}", abstract))
-        for topic in d.get("RelatedTopics", [])[:10]:
-            text = topic.get("Text", "").strip()
-            if len(text) > 60:
-                pairs.append((f"Apa itu {topic.get('FirstURL','').split('/')[-1].replace('_',' ')}?", text))
-        return pairs
+        req = urllib.request.Request(url, headers={"User-Agent": "aland-ai/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+        pages = data.get("query", {}).get("pages", {})
+        links = []
+        for page in pages.values():
+            links += [l["title"] for l in page.get("links", [])]
+        return links
     except: return []
 
-def fetch_hf_wikipedia(url: str) -> list:
-    """Fetch dari HuggingFace datasets API — Wikipedia ID."""
+# ── Scraper ──────────────────────────────────────────────────────────────────
+def fetch(url, timeout=8) -> str:
     try:
-        r = SESSION.get(url, timeout=15)
-        rows = r.json().get("rows", [])
-        pairs = []
-        for row in rows:
-            row_data = row.get("row", {})
-            title = row_data.get("title", "").strip()
-            text  = row_data.get("text", "").strip()
-            if not title or len(text) < 100: continue
-            summary = text[:600]
-            pairs.append((f"Apa itu {title}?", summary))
-            pairs.append((f"Jelaskan tentang {title}", summary))
-            # Ambil paragraf-paragraf
-            for para in text.split("\n\n")[:5]:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 aland-ai/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read().decode("utf-8", errors="ignore")
+    except: return ""
+
+def scrape_wiki(title: str, lang="id") -> list:
+    pairs = []
+    # Summary
+    data = fetch(f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{quote(title)}")
+    if data:
+        try:
+            obj = json.loads(data)
+            summary = obj.get("extract", "").strip()
+            if len(summary) > 80:
+                if lang == "id":
+                    for q in [f"Apa itu {title}?", f"Jelaskan {title}",
+                              f"Apa pengertian {title}?", f"Ceritakan tentang {title}",
+                              f"Apa yang dimaksud {title}?"]:
+                        pairs.append((q, summary[:600]))
+                else:
+                    pairs.append((f"What is {title}?", summary[:600]))
+                    pairs.append((f"Explain {title}", summary[:600]))
+        except: pass
+
+    # Full text
+    data = fetch(f"https://{lang}.wikipedia.org/w/api.php?action=query&titles={quote(title)}&prop=extracts&explaintext=1&format=json")
+    if data:
+        try:
+            pages = json.loads(data).get("query", {}).get("pages", {})
+            text = list(pages.values())[0].get("extract", "")
+            for para in text.split("\n\n")[:15]:
                 para = para.strip()
                 if len(para) > 100:
-                    pairs.append((f"Ceritakan tentang {title}", para[:500]))
-        return pairs
-    except: return []
+                    q = f"Jelaskan tentang {title}" if lang == "id" else f"Tell me about {title}"
+                    pairs.append((q, para[:600]))
+        except: pass
+
+    return pairs
+
+def scrape_ddg(query: str) -> list:
+    pairs = []
+    data = fetch(f"https://api.duckduckgo.com/?q={quote_plus(query)}&format=json&no_html=1&skip_disambig=1")
+    if not data: return pairs
+    try:
+        obj = json.loads(data)
+        abstract = obj.get("AbstractText", "").strip()
+        if len(abstract) > 80:
+            pairs.append((f"Apa itu {query}?", abstract[:600]))
+        for t in obj.get("RelatedTopics", [])[:10]:
+            text = t.get("Text", "").strip()
+            if len(text) > 60:
+                name = t.get("FirstURL", "").split("/")[-1].replace("_", " ")
+                pairs.append((f"Apa itu {name}?", text[:600]))
+    except: pass
+    return pairs
+
+# ── Model builder ─────────────────────────────────────────────────────────────
+def normalize(t): return re.sub(r'\s+', ' ', t.lower().strip())
+def tokenize(t):  return re.findall(r'\w+', normalize(t))
 
 def build_model(pairs: list) -> dict:
     N = max(len(pairs), 1)
@@ -183,11 +156,47 @@ def build_model(pairs: list) -> dict:
     return {"pairs": pairs, "vectors": vectors, "idf": idf}
 
 def upload(tag: str, filepath: Path):
-    subprocess.run(["gh","release","upload",tag,str(filepath),"--clobber"], capture_output=True)
-    mb = filepath.stat().st_size / 1024 / 1024
-    print(f"  ✅ {filepath.name} {mb:.1f}MB → {tag}")
+    """Upload file ke GitHub Releases via API."""
+    token = os.environ.get("GH_TOKEN", "")
+    repo  = "FerdiKusmanto/AI-EVIL-BY-ALAND"
 
+    # Ambil release
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{repo}/releases/tags/{tag}",
+        headers={"Authorization": f"token {token}"})
+    try:
+        with urllib.request.urlopen(req) as r:
+            rel = json.loads(r.read())
+    except: return
+
+    # Hapus asset lama
+    for asset in rel.get("assets", []):
+        if asset["name"] == filepath.name:
+            del_req = urllib.request.Request(
+                f"https://api.github.com/repos/{repo}/releases/assets/{asset['id']}",
+                method="DELETE", headers={"Authorization": f"token {token}"})
+            try: urllib.request.urlopen(del_req)
+            except: pass
+
+    # Upload baru
+    with open(filepath, "rb") as f:
+        content = f.read()
+    up_req = urllib.request.Request(
+        f"https://uploads.github.com/repos/{repo}/releases/{rel['id']}/assets?name={filepath.name}",
+        data=content, method="POST",
+        headers={"Authorization": f"token {token}",
+                 "Content-Type": "application/octet-stream",
+                 "Content-Length": str(len(content))})
+    try:
+        urllib.request.urlopen(up_req)
+        mb = len(content) / 1024 / 1024
+        print(f"  ✅ {filepath.name} {mb:.1f}MB → {tag}")
+    except Exception as e:
+        print(f"  ❌ Upload gagal: {e}")
+
+# ── Main loop ─────────────────────────────────────────────────────────────────
 def main():
+    # Load dataset
     pairs, existing_q = [], set()
     if DATASET.exists():
         with open(DATASET, encoding="utf-8") as f:
@@ -204,88 +213,97 @@ def main():
     size_mb = sum(len(q)+len(a) for q,a in pairs) / 1024 / 1024
     print(f"Dataset awal: {len(pairs)} pairs (~{size_mb:.0f}MB)")
 
-    # Fetch HuggingFace Wikipedia ID — 50000 artikel (target dataset 300MB)
-    print("Fetching HuggingFace Wikipedia ID dataset (target 300MB)...")
-    hf_urls = [
-        f"https://datasets-server.huggingface.co/rows?dataset=wikimedia%2Fwikipedia&config=20231101.id&split=train&offset={i}&length=100"
-        for i in range(0, 50000, 100)
-    ]
-    with ThreadPoolExecutor(max_workers=30) as ex:
-        for new_pairs in ex.map(fetch_hf_wikipedia, hf_urls):
-            for q, a in new_pairs:
-                if q.lower() not in existing_q:
-                    pairs.append((q, a))
-                    existing_q.add(q.lower())
-    size_mb = sum(len(q)+len(a) for q,a in pairs) / 1024 / 1024
-    print(f"  ID fetch: {len(pairs)} pairs (~{size_mb:.0f}MB)")
-
-    print("Fetching HuggingFace Wikipedia EN dataset...")
-    hf_en_urls = [
-        f"https://datasets-server.huggingface.co/rows?dataset=wikimedia%2Fwikipedia&config=20231101.en&split=train&offset={i}&length=100"
-        for i in range(0, 20000, 100)
-    ]
-    with ThreadPoolExecutor(max_workers=30) as ex:
-        for new_pairs in ex.map(fetch_hf_wikipedia, hf_en_urls):
-            for q, a in new_pairs:
-                if q.lower() not in existing_q:
-                    pairs.append((q, a))
-                    existing_q.add(q.lower())
-    size_mb = sum(len(q)+len(a) for q,a in pairs) / 1024 / 1024
-    print(f"Setelah HF fetch: {len(pairs)} pairs (~{size_mb:.0f}MB)")
-
-    topics_id = TOPICS_ID.copy()
-    topics_en = TOPICS_EN.copy()
-    random.shuffle(topics_id)
-    random.shuffle(topics_en)
-    last_save = time.time()
-    idx = 0
+    # Seed topic queue — infinite supply
+    topic_queue = list(SEED_TOPICS)
+    random.shuffle(topic_queue)
+    used_topics = set(t.lower() for t in topic_queue)
+    last_upload = time.time()
+    last_expand = time.time()
 
     while True:
-        # Batch parallel: Wiki ID + Wiki EN + DuckDuckGo
-        batch_tasks = []
-        for i in range(10):
-            batch_tasks.append(("wiki_id", topics_id[(idx+i) % len(topics_id)]))
-            batch_tasks.append(("wiki_en", topics_en[(idx+i) % len(topics_en)]))
-            batch_tasks.append(("ddg", topics_id[(idx+i) % len(topics_id)]))
-        idx = (idx + 10) % len(topics_id)
-        if idx < 10: random.shuffle(topics_id); random.shuffle(topics_en)
+        # Expand topic queue tiap 5 menit dengan topik random dari Wikipedia
+        if time.time() - last_expand > 300:
+            new_random = get_wiki_random("id", 50) + get_wiki_random("en", 30)
+            added_topics = 0
+            for t in new_random:
+                if t.lower() not in used_topics:
+                    topic_queue.append(t)
+                    used_topics.add(t.lower())
+                    added_topics += 1
+            print(f"  📚 +{added_topics} topik baru dari Wikipedia random")
+            last_expand = time.time()
 
-        def run_task(task):
-            kind, topic = task
-            if kind == "wiki_id": return scrape_wiki_id(topic)
-            if kind == "wiki_en": return scrape_wiki_en(topic)
-            if kind == "ddg":     return scrape_duckduckgo(topic)
+        # Ambil batch 20 topik
+        if len(topic_queue) < 20:
+            topic_queue += get_wiki_random("id", 50)
+
+        batch = topic_queue[:20]
+        topic_queue = topic_queue[20:]
+
+        # Scrape parallel: Wiki ID + Wiki EN + DDG
+        tasks = []
+        for t in batch:
+            tasks.append(("id", t))
+            tasks.append(("en", t))
+            tasks.append(("ddg", t))
+
+        def run(task):
+            kind, t = task
+            if kind == "id":  return scrape_wiki(t, "id")
+            if kind == "en":  return scrape_wiki(t, "en")
+            if kind == "ddg": return scrape_ddg(t)
             return []
 
-        added_total = 0
-        with ThreadPoolExecutor(max_workers=WORKERS) as ex:
-            for new_pairs in ex.map(run_task, batch_tasks):
+        added = 0
+        with ThreadPoolExecutor(max_workers=30) as ex:
+            for new_pairs in ex.map(run, tasks):
                 for q, a in new_pairs:
                     if q.lower() not in existing_q:
                         pairs.append((q, a))
                         existing_q.add(q.lower())
-                        added_total += 1
+                        added += 1
 
-        size_kb = sum(len(q)+len(a) for q,a in pairs) // 1024
-        print(f"+{added_total} pairs | total: {len(pairs)} | ~{size_kb//1024}MB raw")
+                        # Expand queue dari links artikel
+                        if added % 100 == 0:
+                            pass  # dilakukan di expand loop
 
-        if time.time() - last_save >= INTERVAL:
+        size_mb = sum(len(q)+len(a) for q,a in pairs) / 1024 / 1024
+        print(f"+{added} pairs | total: {len(pairs)} | ~{size_mb:.0f}MB | queue: {len(topic_queue)}")
+
+        # Upload tiap 1 menit
+        if time.time() - last_upload >= UPLOAD_INTERVAL:
             print(f"\n⏱ Saving & uploading...")
+
+            # Simpan dataset
             with open(DATASET, "w", encoding="utf-8") as f:
                 for q, a in pairs:
-                    f.write(json.dumps({"messages":[
-                        {"role":"user","content":q},
-                        {"role":"assistant","content":a}
+                    f.write(json.dumps({"messages": [
+                        {"role": "user", "content": q},
+                        {"role": "assistant", "content": a}
                     ]}, ensure_ascii=False) + "\n")
+
+            # Build + upload model
             model = build_model(pairs)
             with open(MODEL_OUT, "wb") as f:
                 pickle.dump(model, f)
             upload("model-latest", MODEL_OUT)
-            gz = Path(str(DATASET)+".gz")
-            subprocess.run(["gzip","-kf",str(DATASET)], capture_output=True)
+
+            # Upload dataset
+            gz = Path(str(DATASET) + ".gz")
+            subprocess.run(["gzip", "-kf", str(DATASET)], capture_output=True)
             upload("dataset-latest", gz)
-            last_save = time.time()
-            print()
+
+            last_upload = time.time()
+
+            # Expand queue dari linked pages artikel terbaru
+            sample_topics = random.sample(batch, min(5, len(batch)))
+            for t in sample_topics:
+                links = get_wiki_links(t, "id")[:20]
+                for link in links:
+                    if link.lower() not in used_topics:
+                        topic_queue.append(link)
+                        used_topics.add(link.lower())
+            print(f"  Queue diperluas: {len(topic_queue)} topik tersisa\n")
 
 if __name__ == "__main__":
     main()
