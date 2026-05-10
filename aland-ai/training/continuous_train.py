@@ -203,19 +203,34 @@ def main():
                 except: pass
     print(f"Dataset awal: {len(pairs)} pairs ({sum(len(q)+len(a) for q,a in pairs)//1024}KB)")
 
-    # Fetch HuggingFace Wikipedia ID dulu (batch besar)
-    print("Fetching HuggingFace Wikipedia ID dataset...")
+    # Fetch HuggingFace Wikipedia ID — 50000 artikel (target dataset 300MB)
+    print("Fetching HuggingFace Wikipedia ID dataset (target 300MB)...")
     hf_urls = [
         f"https://datasets-server.huggingface.co/rows?dataset=wikimedia%2Fwikipedia&config=20231101.id&split=train&offset={i}&length=100"
-        for i in range(0, 5000, 100)  # 5000 artikel Wikipedia ID
+        for i in range(0, 50000, 100)
     ]
-    with ThreadPoolExecutor(max_workers=20) as ex:
+    with ThreadPoolExecutor(max_workers=30) as ex:
         for new_pairs in ex.map(fetch_hf_wikipedia, hf_urls):
             for q, a in new_pairs:
                 if q.lower() not in existing_q:
                     pairs.append((q, a))
                     existing_q.add(q.lower())
-    print(f"Setelah HF fetch: {len(pairs)} pairs")
+    size_mb = sum(len(q)+len(a) for q,a in pairs) / 1024 / 1024
+    print(f"  ID fetch: {len(pairs)} pairs (~{size_mb:.0f}MB)")
+
+    print("Fetching HuggingFace Wikipedia EN dataset...")
+    hf_en_urls = [
+        f"https://datasets-server.huggingface.co/rows?dataset=wikimedia%2Fwikipedia&config=20231101.en&split=train&offset={i}&length=100"
+        for i in range(0, 20000, 100)
+    ]
+    with ThreadPoolExecutor(max_workers=30) as ex:
+        for new_pairs in ex.map(fetch_hf_wikipedia, hf_en_urls):
+            for q, a in new_pairs:
+                if q.lower() not in existing_q:
+                    pairs.append((q, a))
+                    existing_q.add(q.lower())
+    size_mb = sum(len(q)+len(a) for q,a in pairs) / 1024 / 1024
+    print(f"Setelah HF fetch: {len(pairs)} pairs (~{size_mb:.0f}MB)")
 
     topics_id = TOPICS_ID.copy()
     topics_en = TOPICS_EN.copy()
