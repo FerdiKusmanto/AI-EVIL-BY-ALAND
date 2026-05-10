@@ -32,70 +32,108 @@ def get_releases():
 # ── Scrape topik dari berbagai sumber ────────────────────────────────────────
 def scrape_topic_web(topic: str) -> list:
     """Cari data tentang topik dari Wikipedia ID + EN + DuckDuckGo."""
-    pairs = []
     import re
+    # Bersihkan input — hapus kata tidak perlu
+    topic = re.sub(r'\b(adalah|itu|merupakan|yaitu|yakni|tentang|mengenai)\b', '', topic, flags=re.I).strip()
+    topic = re.sub(r'\s+', ' ', topic).strip()
+
+    pairs = []
 
     def fetch(url, timeout=8):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "aland-ai/1.0"})
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 aland-ai/1.0"})
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return r.read().decode("utf-8", errors="ignore")
         except: return ""
 
-    # 1. Wikipedia Indonesia
-    wiki_url = f"https://id.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(topic)}"
-    data = fetch(wiki_url)
-    if data:
+    def wiki_search_id(q):
+        """Cari judul artikel Wikipedia ID yang paling relevan."""
+        url = f"https://id.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(q)}&format=json&srlimit=3"
+        data = fetch(url)
+        if not data: return []
         try:
-            obj = json.loads(data)
-            summary = obj.get("extract", "").strip()
-            if len(summary) > 80:
-                for q in [f"Apa itu {topic}?", f"Jelaskan {topic}",
-                          f"Apa pengertian {topic}?", f"Ceritakan tentang {topic}"]:
-                    pairs.append((q, summary[:600]))
-        except: pass
+            results = json.loads(data).get("query", {}).get("search", [])
+            return [r["title"] for r in results]
+        except: return []
 
-    # 2. Wikipedia English
-    wiki_en = f"https://en.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(topic)}"
-    data = fetch(wiki_en)
-    if data:
+    def wiki_summary_id(title):
+        url = f"https://id.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(title)}"
+        data = fetch(url)
+        if not data: return ""
+        try: return json.loads(data).get("extract", "").strip()
+        except: return ""
+
+    def wiki_full_id(title):
+        url = f"https://id.wikipedia.org/w/api.php?action=query&titles={urllib.parse.quote(title)}&prop=extracts&explaintext=1&format=json"
+        data = fetch(url)
+        if not data: return ""
         try:
-            obj = json.loads(data)
-            summary = obj.get("extract", "").strip()
-            if len(summary) > 80:
-                pairs.append((f"What is {topic}?", summary[:600]))
-                pairs.append((f"Explain {topic}", summary[:600]))
-        except: pass
+            pages = json.loads(data).get("query", {}).get("pages", {})
+            return list(pages.values())[0].get("extract", "")
+        except: return ""
 
-    # 3. DuckDuckGo Instant Answer
-    ddg_url = f"https://api.duckduckgo.com/?q={urllib.parse.quote(topic)}&format=json&no_html=1&skip_disambig=1"
-    data = fetch(ddg_url)
-    if data:
+    def wiki_summary_en(title):
+        url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(title)}"
+        data = fetch(url)
+        if not data: return ""
+        try: return json.loads(data).get("extract", "").strip()
+        except: return ""
+
+    def ddg(q):
+        url = f"https://api.duckduckgo.com/?q={urllib.parse.quote(q)}&format=json&no_html=1&skip_disambig=1"
+        data = fetch(url)
+        results = []
+        if not data: return results
         try:
             obj = json.loads(data)
             abstract = obj.get("AbstractText", "").strip()
-            if len(abstract) > 80:
-                pairs.append((f"Apa itu {topic}?", abstract))
-            for t in obj.get("RelatedTopics", [])[:5]:
+            if len(abstract) > 60: results.append(abstract)
+            for t in obj.get("RelatedTopics", [])[:8]:
                 text = t.get("Text", "").strip()
-                if len(text) > 60:
-                    pairs.append((f"Apa hubungan {topic} dengan {t.get('FirstURL','').split('/')[-1].replace('_',' ')}?", text))
+                if len(text) > 60: results.append(text)
         except: pass
+        return results
 
-    # 4. Wikipedia sections (lebih detail)
-    wiki_sections = f"https://id.wikipedia.org/w/api.php?action=query&titles={urllib.parse.quote(topic)}&prop=extracts&explaintext=1&format=json"
-    data = fetch(wiki_sections)
-    if data:
-        try:
-            pages = json.loads(data).get("query", {}).get("pages", {})
-            for page in pages.values():
-                text = page.get("extract", "")
-                paragraphs = [p.strip() for p in text.split("\n\n") if len(p.strip()) > 100]
-                for i, para in enumerate(paragraphs[:10]):
-                    pairs.append((f"Ceritakan tentang {topic} bagian {i+1}", para[:600]))
-        except: pass
+    # 1. Cari artikel Wikipedia ID yang relevan
+    titles = wiki_search_id(topic)
+    if not titles:
+        titles = [topic]  # fallback langsung pakai topik
 
-    return pairs
+    for title in titles[:3]:
+        summary = wiki_summary_id(title)
+        if len(summary) > 80:
+            for q in [f"Apa itu {title}?", f"Jelaskan {title}",
+                      f"Apa pengertian {title}?", f"Ceritakan tentang {title}"]:
+                pairs.append((q, summary[:600]))
+        # Ambil full text, pecah per paragraf
+        full = wiki_full_id(title)
+        for para in full.split("\n\n")[:8]:
+            para = para.strip()
+            if len(para) > 100:
+                pairs.append((f"Ceritakan tentang {title}", para[:600]))
+
+    # 2. Wikipedia English
+    en_summary = wiki_summary_en(topic)
+    if len(en_summary) > 80:
+        pairs.append((f"What is {topic}?", en_summary[:600]))
+        pairs.append((f"Explain {topic}", en_summary[:600]))
+
+    # 3. DuckDuckGo
+    for text in ddg(topic):
+        pairs.append((f"Apa itu {topic}?", text[:600]))
+    for text in ddg(f"{topic} Indonesia"):
+        pairs.append((f"Jelaskan {topic} di Indonesia", text[:600]))
+
+    # Deduplikasi
+    seen = set()
+    unique = []
+    for q, a in pairs:
+        key = q.lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append((q, a))
+
+    return unique
 
 def add_to_dataset(pairs: list):
     """Tambah pairs ke dataset lokal dan upload ke GitHub Releases."""
