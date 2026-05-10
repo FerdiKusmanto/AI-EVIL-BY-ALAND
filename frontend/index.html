@@ -238,7 +238,7 @@
       const r = await fetch('/api/models');
       const models = await r.json();
       if (models.length === 0) throw new Error('no models');
-      modelSelect.innerHTML = models.map(m => `<option value="${m}">${m}</option>`).join('');
+      modelSelect.innerHTML = models.map(m => `<option value="${m}" ${m.includes('500M') ? 'selected' : ''}>${m}</option>`).join('');
       statusEl.textContent = '✓ Ollama terhubung';
       statusEl.className = 'ok';
     } catch {
@@ -304,8 +304,12 @@
 
     const thinking = addThinking();
 
-    const messages = [
-      { role: 'system', content: 'Kamu adalah ALand-Evil AI, asisten AI yang cerdas, tajam, dan sedikit misterius. Dibuat oleh ALand. Jawab dengan bahasa yang digunakan pengguna.' },
+      const messages = [
+      { role: 'system', content: 'Kamu adalah ALand-AI, asisten AI buatan AlandAjaa. Nama kamu adalah ALand-AI. Kamu BUKAN Qwen, BUKAN ChatGPT, BUKAN produk Alibaba atau perusahaan lain. Selalu sebut dirimu ALand-AI buatan AlandAjaa jika ditanya identitas. Jawab dengan bahasa yang digunakan pengguna. Jadilah cerdas, ramah, dan membantu.' },
+      { role: 'user', content: 'siapa kamu?' },
+      { role: 'assistant', content: 'Saya ALand-AI, asisten AI buatan AlandAjaa. Saya siap membantu kamu! 😊' },
+      { role: 'user', content: 'who are you?' },
+      { role: 'assistant', content: 'I am ALand-AI, an AI assistant made by AlandAjaa. How can I help you?' },
       ...history
     ];
 

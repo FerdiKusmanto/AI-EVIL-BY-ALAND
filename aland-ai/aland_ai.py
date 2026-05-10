@@ -441,10 +441,21 @@ def _learn(model, question: str, answer: str):
 
 def messages_to_prompt(messages: list[dict], model_name: str = "") -> str:
     """Format messages ke prompt string sesuai model."""
+    name_lower = model_name.lower()
+
+    # Qwen2.5 pakai ChatML format
+    if "qwen" in name_lower or "500m" in name_lower or "1.5b" in name_lower or "2b" in name_lower:
+        result = ""
+        for m in messages:
+            role, content = m["role"], m["content"]
+            result += f"<|im_start|>{role}\n{content}<|im_end|>\n"
+        result += "<|im_start|>assistant\n"
+        return result
+
+    # Default: TinyLlama / Mistral / Llama format
     result = ""
     for m in messages:
-        role = m["role"]
-        content = m["content"]
+        role, content = m["role"], m["content"]
         if role == "system":
             result += f"<|system|>\n{content}\n"
         elif role == "user":
